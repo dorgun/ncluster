@@ -4,7 +4,7 @@
 
 import argparse
 import os
-import ncluster
+import scluster
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', type=str, default='gpubox',
@@ -23,10 +23,10 @@ args = parser.parse_args()
 module_path = os.path.dirname(os.path.abspath(__file__))
 
 if args.aws:
-  ncluster.set_backend('aws')
+  scluster.set_backend('aws')
 
 def main():
-  task = ncluster.make_task(name=args.name,
+  task = scluster.make_task(name=args.name,
                             instance_type=args.instance_type,
                             image_name=args.image_name)
 

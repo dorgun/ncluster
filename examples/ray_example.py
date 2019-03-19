@@ -54,14 +54,14 @@ class ParameterServer(object):
 
 
 def run_launcher():
-  import ncluster
+  import scluster
 
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
   script = os.path.basename(__file__)
   assert script in os.listdir('.')
-  job = ncluster.make_job(install_script='pip install ray',
+  job = scluster.make_job(install_script='pip install ray',
                           image_name=args.image,
                           instance_type='c5.large',
                           num_tasks=2)

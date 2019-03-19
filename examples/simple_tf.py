@@ -2,8 +2,8 @@
 import sys
 
 if not sys.argv[1:]:
-  import ncluster
-  task = ncluster.make_task(instance_type='t3.micro')
+  import scluster
+  task = scluster.make_task(instance_type='t3.micro')
   task.upload(__file__)
   task.run('pip install tensorflow')
   task.run(f'python {__file__} worker')

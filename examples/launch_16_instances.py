@@ -1,11 +1,11 @@
-import ncluster
+import scluster
 import time
 
 def main():
-  ncluster.set_backend('aws')
+  scluster.set_backend('aws')
   
   start_time = time.time()
-  job = ncluster.make_job(num_tasks=16)
+  job = scluster.make_job(num_tasks=16)
   print(f"waited for startup for {time.time()-start_time} seconds")
 
   start_time = time.time()

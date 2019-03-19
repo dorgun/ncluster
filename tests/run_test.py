@@ -1,7 +1,7 @@
-import ncluster
+import scluster
 
 def test():
-  run = ncluster.make_run('run_test')
+  run = scluster.make_run('run_test')
   job1 = run.make_job('job1')
   task1 = job1.tasks[0]
   assert task1.name == '0.job1.run_test'

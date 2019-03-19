@@ -1,4 +1,4 @@
 from setuptools import setup
-setup(scripts=['ncluster/aws_create_resources.py',
-               'ncluster/aws_delete_resources.py'])
+setup(scripts=['scluster/aws_create_resources.py',
+               'scluster/aws_delete_resources.py'])
 

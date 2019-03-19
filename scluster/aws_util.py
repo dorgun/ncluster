@@ -273,7 +273,8 @@ def get_keypair_fn():
 
 
 def get_vpc_name():
-    return get_prefix()
+    name = os.environ.get('NCLUSTER_VPC', get_prefix())
+    return name
 
 
 def get_security_group_name():

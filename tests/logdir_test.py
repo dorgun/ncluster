@@ -5,11 +5,11 @@ import random
 import sys
 import threading
 
-import ncluster
+import scluster
 
 
 def test_two_jobs():
-  run = ncluster.make_run('logdir_test')
+  run = scluster.make_run('logdir_test')
   job1 = run.make_job('job1')
   task1 = job1.tasks[0]
   task1.run(f'echo hello > {task1.logdir}/message')
@@ -19,14 +19,14 @@ def test_two_jobs():
 
 
 def test_multiple_logdirs():
-  logdir1 = ncluster.get_logdir_root() + '/test1'
-  dummy_task = ncluster.make_task()
+  logdir1 = scluster.get_logdir_root() + '/test1'
+  dummy_task = scluster.make_task()
   dummy_task.run(f'rm -Rf {logdir1}')
-  task1 = ncluster.make_task(run_name='test1')
+  task1 = scluster.make_task(run_name='test1')
   assert task1.logdir == logdir1
 
-  logdir2 = ncluster.get_logdir_root() + '/test2'
-  task2 = ncluster.make_task(run_name='test2')
+  logdir2 = scluster.get_logdir_root() + '/test2'
+  task2 = scluster.make_task(run_name='test2')
   dummy_task.run(f'rm -Rf {logdir2}*')
   dummy_task.run(f'mkdir {logdir2}')
   assert task2.logdir == logdir2 + '.01'
@@ -34,10 +34,10 @@ def test_multiple_logdirs():
 
 def test_multiple_logdir_tasks():
   n = 10
-  dummy_task = ncluster.make_task()
-  logdir1 = ncluster.get_logdir_root() + '/test1'
+  dummy_task = scluster.make_task()
+  logdir1 = scluster.get_logdir_root() + '/test1'
   dummy_task.run(f'rm -Rf {logdir1}')
-  job = ncluster.make_job(run_name='test1', num_tasks=n)
+  job = scluster.make_job(run_name='test1', num_tasks=n)
 
   obtained_logdirs = []
 

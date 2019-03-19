@@ -14,7 +14,7 @@ from typing import Tuple, List
 
 import paramiko
 
-from ncluster import ncluster_globals
+from scluster import ncluster_globals
 
 from . import aws_create_resources as create_lib
 from . import aws_util as u

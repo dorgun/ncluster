@@ -101,12 +101,12 @@ def worker():
 
 
 def launcher():
-  import ncluster
+  import scluster
   
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
-  job = ncluster.make_job(args.name, num_tasks=2, image_name=args.image)
+  job = scluster.make_job(args.name, num_tasks=2, image_name=args.image)
   job.upload(__file__)
   job.upload('util.py')
 

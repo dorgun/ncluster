@@ -64,15 +64,15 @@ def _launch_server(role):
 
 
 def run_launcher():
-  import ncluster
+  import scluster
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
-  job = ncluster.make_job('tf_adder', num_tasks=2, image_name=args.image)
+  job = scluster.make_job('tf_adder', num_tasks=2, image_name=args.image)
   job.upload(__file__)
   
   sender, receiver = job.tasks
-  if ncluster.get_backend() == 'aws':
+  if scluster.get_backend() == 'aws':
     # on AWS probably running in conda DLAMI, switch into TF-enabled env
     job.run('source activate tensorflow_p36')
 

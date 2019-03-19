@@ -1,8 +1,8 @@
-import ncluster
+import scluster
 import pytest
 
 def test():
-  task = ncluster.make_task(image_name=ncluster.aws_backend.GENERIC_SMALL_IMAGE)
+  task = scluster.make_task(image_name=scluster.aws_backend.GENERIC_SMALL_IMAGE)
   task.run("mkdir /illegal", non_blocking=True)
   task.join(ignore_errors=True)  # this succeed/print error message
 

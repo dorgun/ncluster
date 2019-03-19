@@ -98,10 +98,10 @@ class ParameterServer(object):
 
 
 def run_launcher():
-  import ncluster
+  import scluster
 
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
   if args.nightly:
     # running locally MacOS
@@ -112,11 +112,11 @@ def run_launcher():
   else:
     install_script = 'pip install ray'
 
-  job = ncluster.make_job(name=args.name,
+  job = scluster.make_job(name=args.name,
                           install_script=install_script,
                           image_name=args.image,
                           num_tasks=args.num_workers+args.num_ps)
-  if not ncluster.running_locally():
+  if not scluster.running_locally():
     job._run_raw('killall python', ignore_errors=True)
   
   job.upload(__file__)

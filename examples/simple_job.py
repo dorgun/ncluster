@@ -1,10 +1,10 @@
-import ncluster
+import scluster
 import time
 
 def main():
-  ncluster.set_backend('local')
+  scluster.set_backend('local')
 
-  job = ncluster.make_job(num_tasks=2)
+  job = scluster.make_job(num_tasks=2)
 
   start_time = time.time()
   job.run('sleep 1')

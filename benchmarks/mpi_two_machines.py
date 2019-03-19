@@ -43,19 +43,19 @@ args = parser.parse_args()
 
 
 def run_launcher():
-  import ncluster
+  import scluster
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
-  job = ncluster.make_job(args.name, num_tasks=2, image_name=args.image)
+  job = scluster.make_job(args.name, num_tasks=2, image_name=args.image)
   job.upload(__file__)
   job.upload('util.py')
 
   # kill python just for when tmux session reuse is on
-  if not ncluster.running_locally():
+  if not scluster.running_locally():
     job._run_raw('killall python', ignore_errors=True)
 
-  if ncluster.get_backend() == 'aws':
+  if scluster.get_backend() == 'aws':
     # on AWS probably running in conda DLAMI, switch into TF-enabled env
     job.run('source activate tensorflow_p36')
 

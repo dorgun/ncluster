@@ -7,8 +7,8 @@ import os
 import sys
 import time
 
-from ncluster import aws_util as u
-from ncluster import util
+from scluster import aws_util as u
+from scluster import util
 
 DRYRUN = False
 DEBUG = True

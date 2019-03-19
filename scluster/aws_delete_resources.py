@@ -6,8 +6,8 @@ import sys
 import os
 import argparse
 
-from ncluster import aws_util as u
-from ncluster import util
+from scluster import aws_util as u
+from scluster import util
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--kind', type=str, default='all',

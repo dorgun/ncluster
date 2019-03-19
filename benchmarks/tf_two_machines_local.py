@@ -63,20 +63,20 @@ def _launch_server(role):
 
 
 def run_launcher():
-  import ncluster
-  ncluster.util.assert_script_in_current_directory()
+  import scluster
+  scluster.util.assert_script_in_current_directory()
   
   if args.aws:
-    ncluster.set_backend('aws')
+    scluster.set_backend('aws')
 
   # use 4GB instance, 0.5GB not enough
-  worker = ncluster.make_task(args.name, image_name=args.image,
+  worker = scluster.make_task(args.name, image_name=args.image,
                               instance_type='t3.medium')
   worker.upload(__file__)
   worker.upload('util.py')
 
   # kill python just for when tmux session reuse is on
-  if not ncluster.running_locally():
+  if not scluster.running_locally():
     # on AWS probably running in conda DLAMI, switch into TF-enabled env
     worker._run_raw('killall python', ignore_errors=True)
     worker.run('source activate tensorflow_p36')
@@ -85,7 +85,7 @@ def run_launcher():
   worker.run(f'python {__file__} --role=receiver {ip_config}',
                non_blocking=True)
   worker.switch_window(1)  # run in new tmux window
-  if not ncluster.running_locally():
+  if not scluster.running_locally():
     worker.run('source activate tensorflow_p36')
   worker.run(
     f'python {__file__} --role=sender {ip_config} --iters={args.iters} --size-mb={args.size_mb} --shards={args.shards}')

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-import ncluster
+import scluster
 
 # allocate default machine type and default image
-task = ncluster.make_task()
+task = scluster.make_task()
 output = task.run('ifconfig')
 print(f"Task ifconfig returned {output}")
