@@ -6,6 +6,7 @@ User creates them through make_run/make_job/make_task methods
 """
 # Job launcher Python API: https://docs.google.com/document/d/1yTkb4IPJXOUaEWksQPCH7q0sjqHgBf3f70cWzfoFboc/edit
 # AWS job launcher (concepts): https://docs.google.com/document/d/1IbVn8_ckfVO3Z9gIiE0b9K3UrBRRiO9HYZvXSkPXGuw/edit
+import logging
 import threading
 import time
 from typing import List, Tuple, Any
@@ -15,6 +16,7 @@ from . import util
 # aws_backend.py
 # local_backend.py
 
+logger = logging.getLogger(__name__)
 LOGDIR_ROOT: str = None  # location of logdir for this backend
 
 """
@@ -119,7 +121,7 @@ class Task:
         Returns:
           False if waiting was was cut short by max_wait_sec limit, True otherwise
         """
-        print("Waiting for file", fn)
+        logger.info(f"Waiting for file {fn}")
         start_time = time.time()
         while True:
             if time.time() - start_time > max_wait_sec:

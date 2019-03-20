@@ -1,5 +1,5 @@
 """Methods used in aws_backend, but also useful for standalone prototyping in Jupyter"""
-
+import logging
 import os
 import re
 import sys
@@ -11,13 +11,15 @@ from operator import itemgetter
 
 import boto3
 
+from scluster.scluster.backend import Task
 from . import util
 
+logger = logging.getLogger(__name__)
 EMPTY_NAME = "noname"  # name to use when name attribute is missing on AWS
 RETRY_INTERVAL_SEC = 1  # how long to wait before retries
 RETRY_TIMEOUT_SEC = 30  # how long to wait before retrying fails
-DEFAULT_PREFIX = 'ncluster'
-PRIVATE_KEY_LOCATION = os.environ['HOME'] + '/.ncluster'
+DEFAULT_PREFIX = 'scluster'
+PRIVATE_KEY_LOCATION = os.environ['HOME'] + '/.scluster'
 DUPLICATE_CHECKING = False
 
 
@@ -31,15 +33,15 @@ def get_vpc():
     https://boto3.readthedocs.io/en/latest/reference/services/ec2.html#vpc
     """
 
-    return get_vpc_dict()[get_prefix()]
+    return get_vpc_dict()[get_vpc_name()]
 
 
 def get_security_group():
     """
     Returns current security group, ec2.SecurityGroup object
     https://boto3.readthedocs.io/en/latest/reference/services/ec2.html#securitygroup
-  """
-    return get_security_group_dict()[get_prefix()]
+    """
+    return get_security_group_dict(get_vpc())[get_security_group_name()]
 
 
 def get_subnet():
@@ -86,10 +88,12 @@ def get_subnet_dict():
     """Returns dictionary of "availability zone" -> subnet for current VPC."""
     subnet_dict = {}
     vpc = get_vpc()
+    subnet_regexp = re.compile(os.environ.get('SCLUSTER_SUBNET_SUFFIX', get_prefix()))
     for subnet in vpc.subnets.all():
         zone = subnet.availability_zone
-        assert zone not in subnet_dict, "More than one subnet in %s, why?" % (zone,)
-        subnet_dict[zone] = subnet
+        if subnet_regexp.search(dict(map(lambda x: (x["Key"], x["Value"]), subnet.tags))["Name"]):
+            assert zone not in subnet_dict, "More than one subnet in %s, why?" % (zone,)
+            subnet_dict[zone] = subnet
     return subnet_dict
 
 
@@ -144,7 +148,7 @@ def get_placement_group_dict():
     return result
 
 
-def get_security_group_dict():
+def get_security_group_dict(vpc_id=None):
     """Returns dictionary of named security groups {name: securitygroup}."""
 
     client = get_ec2_client()
@@ -157,12 +161,16 @@ def get_security_group_dict():
         key = get_name(security_group_response.get('Tags', []))
         if not key or key == EMPTY_NAME:
             continue  # ignore unnamed security groups
-        #    key = security_group_response['GroupName']
-        if key in result:
-            util.log(f"Warning: Duplicate security group {key}")
-            if DUPLICATE_CHECKING:
-                assert key not in result, ("Duplicate security group " + key)
-        result[key] = ec2.SecurityGroup(security_group_response['GroupId'])
+        security_group = ec2.SecurityGroup(security_group_response['GroupId'])
+        if not vpc_id:
+            if security_group.vpc_id == vpc_id:
+                if key in result:
+                    logger.info(f"Warning: Duplicate security group {key}")
+                result[key] = security_group
+        else:
+            if key in result:
+                logger.info(f"Warning: Duplicate security group {key}")
+            result[key] = security_group
 
     return result
 
@@ -187,10 +195,10 @@ def get_keypair_dict():
 
 
 def get_prefix():
-    """Global prefix to identify ncluster created resources name used to identify ncluster created resources,
-    (name of EFS, VPC, keypair prefixes), can be changed through $NCLUSTER_PREFIX for debugging purposes. """
+    """Global prefix to identify scluster created resources name used to identify scluster created resources,
+    (name of EFS, VPC, keypair prefixes), can be changed through $SCLUSTER_PREFIX for debugging purposes. """
 
-    name = os.environ.get('NCLUSTER_PREFIX', DEFAULT_PREFIX)
+    name = os.environ.get('SCLUSTER_PREFIX', DEFAULT_PREFIX)
     if name != DEFAULT_PREFIX:
         validate_prefix(name)
     return name
@@ -214,7 +222,7 @@ def get_region():
 
 def get_zone() -> str:
     """Returns current zone, or empty string if it's unset."""
-    return os.environ.get('NCLUSTER_ZONE', '')
+    return os.environ.get('SCLUSTER_ZONE', '')
 
 
 def get_zones():
@@ -273,19 +281,15 @@ def get_keypair_fn():
 
 
 def get_vpc_name():
-    name = os.environ.get('NCLUSTER_VPC', get_prefix())
-    return name
+    return os.environ.get('SCLUSTER_VPC', get_prefix())
 
 
 def get_security_group_name():
-    # We have two security groups, ncluster for manually created VPC and
-    # ncluster-default for default VPC. Once default VPC works for all cases, can
-    # get rid of one of security groups
-    return get_prefix()
+    return os.environ.get('SCLUSTER_SECURITY_GROUP', get_prefix())
 
 
 def get_gateway_name():
-    return get_prefix()
+    return os.environ.get('SCLUSTER_GATEWAY', get_prefix())
 
 
 def get_route_table_name():
@@ -293,7 +297,7 @@ def get_route_table_name():
 
 
 def get_efs_name():
-    return get_prefix()
+    return os.environ.get('SCLUSTER_EFS', get_prefix())
 
 
 def get_username():
@@ -369,7 +373,7 @@ def lookup_instance(
             return result[0]
 
 
-def ssh_to_task(task) -> paramiko.SSHClient:
+def ssh_to_task(task, access_type: str ) -> paramiko.SSHClient:
     """Create ssh connection to task's machine
 
     returns Paramiko SSH client connected to host.
@@ -377,9 +381,15 @@ def ssh_to_task(task) -> paramiko.SSHClient:
     """
 
     username = task.ssh_username
-    hostname = task.public_ip
+    if access_type == 'private':
+        hostname = task.ip
+    elif access_type == 'public':
+        hostname = task.public_ip
+    else:
+        raise Exception(f"Invalid access type {access_type}. Permissible access type : private or public")
+
     ssh_key_fn = get_keypair_fn()
-    print(f"ssh -i {ssh_key_fn} {username}@{hostname}")
+    logger.info(f"ssh -i {ssh_key_fn} {username}@{hostname}")
     pkey = paramiko.RSAKey.from_private_key_file(ssh_key_fn)
 
     ssh_client = paramiko.SSHClient()
@@ -394,8 +404,7 @@ def ssh_to_task(task) -> paramiko.SSHClient:
                 hostname = task.public_ip
             break
         except Exception as e:
-            print(
-                f'{task.name}: Exception connecting to {hostname} via ssh (could be a timeout): {e}')
+            logger.warning(f'{task.name}: Exception connecting to {hostname} via ssh (could be a timeout): {e}')
             time.sleep(RETRY_INTERVAL_SEC)
 
     return ssh_client
@@ -427,7 +436,9 @@ resource_regexp = re.compile('^[a-z0-9]+$')
 
 
 def validate_prefix(name):
-    """Check that name is valid as substitute for default prefix. Since it's used in unix filenames, key names, be more conservative than AWS requirements, just allow 30 chars, lowercase only."""
+    """Check that name is valid as substitute for default prefix.
+    Since it's used in unix filenames, key names, be more conservative than AWS requirements,
+    just allow 30 chars, lowercase only."""
     assert len(name) <= 30
     assert resource_regexp.match(name)
     validate_aws_name(name)
@@ -804,12 +815,12 @@ def create_spot_instances(launch_specs, spot_price=26, expiration_mins=15):
     try:
         spot_requests = ec2c.request_spot_instances(**spot_args)
     except Exception as e:
-        assert False, f"Spot instance request failed (out of capacity?), error was {e}"
+        logger.error(f"Spot instance request failed (out of capacity?), error was {e}")
 
     spot_requests = spot_requests['SpotInstanceRequests']
     instance_ids = wait_on_fulfillment(ec2c, spot_requests)
 
-    print('Instances fullfilled...')
+    logger.info('Instances fullfilled...')
     ec2 = get_ec2_resource()
     instances = list(
         ec2.instances.filter(Filters=[{'Name': 'instance-id', 'Values': list(filter(None, instance_ids))}]))
@@ -829,12 +840,12 @@ def create_spot_instances(launch_specs, spot_price=26, expiration_mins=15):
 def wait_on_fulfillment(ec2c, reqs):
     def get_instance_id(req):
         while req['State'] != 'active':
-            print('Waiting on spot fullfillment...')
+            logger.info("Waiting on spot fullfillment...")
             time.sleep(30)
             reqs = ec2c.describe_spot_instance_requests(
                 Filters=[{'Name': 'spot-instance-request-id', 'Values': [req['SpotInstanceRequestId']]}])
             if not reqs['SpotInstanceRequests']:
-                print(f"SpotInstanceRequest for {req['SpotInstanceRequestId']} not found")
+                logger.info(f"SpotInstanceRequest for {req['SpotInstanceRequestId']} not found")
                 continue
             req = reqs['SpotInstanceRequests'][0]
             req_status = req['Status']
@@ -842,15 +853,15 @@ def wait_on_fulfillment(ec2c, reqs):
                 if req_status['Code'] not in ['capacity-not-available', 'capacity-oversubscribed', 'price-too-low',
                                               'not-scheduled-yet', 'launch-group-constraint', 'az-group-constraint',
                                               'placement-group-constraint', 'constraint-not-fulfillable']:
-                    print('Spot instance request failed:', req_status['Message'])
-                    print('Cancelling request. Please try again or use on demand.')
+                    logger.error(f"Spot instance request failed: req_status['Message']")
+                    logger.error("Cancelling request. Please try again or use on demand.")
                     ec2c.cancel_spot_instance_requests(SpotInstanceRequestIds=[req['SpotInstanceRequestId']])
-                    print(req)
+                    logger.error(req)
                     return None
                 else:
-                    print('Waititg instance: Request status: ', req_status['Code'])
+                    logger.info(f"Waititg instance: Request status: {req_status['Code']}")
         instance_id = req['InstanceId']
-        print('Fulfillment completed. InstanceId:', instance_id)
+        logger.info(f"Fulfillment completed. InstanceId: {instance_id}")
         return instance_id
 
     return [get_instance_id(req) for req in reqs]

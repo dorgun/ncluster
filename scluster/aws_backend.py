@@ -10,11 +10,12 @@ import signal
 import stat
 import threading
 import time
+import logging
 from typing import Tuple, List
 
 import paramiko
 
-from scluster import ncluster_globals
+from . import scluster_globals
 
 from . import aws_create_resources as create_lib
 from . import aws_util as u
@@ -23,11 +24,13 @@ from . import util
 
 TMPDIR = '/tmp/ncluster'  # location for temp files on launching machine
 AWS_LOCK_FN = '/tmp/aws.lock'  # lock file used to prevent concurrent creation of AWS resources by multiple workers in parallel
-NCLUSTER_DEFAULT_REGION = 'us-east-1'  # used as last resort if no other method set a region
+SCLUSTER_DEFAULT_REGION = 'us-east-1'  # used as last resort if no other method set a region
 LOGDIR_ROOT = '/ncluster/runs'
 
 # some image which is fast to load, to use for quick runs
 GENERIC_SMALL_IMAGE = 'amzn2-ami-hvm-2.0.20180622.1-x86_64-gp2'
+
+logger = logging.getLogger(__name__)
 
 
 class Task(backend.Task):
@@ -66,15 +69,20 @@ class Task(backend.Task):
         self.install_script = install_script
         self.extra_kwargs = extra_kwargs
 
-        self.public_ip = u.get_public_ip(instance)
-        self.ip = u.get_ip(instance)
+        access_type = os.environ.get('SCLUSTER_INSTANCE_ACCESS_TYPE', "private")
+        if access_type == 'private':
+            self.ip = u.get_ip(instance)
+        elif access_type == 'public':
+            self.ip = u.get_public_ip(instance)
+        else:
+            raise Exception("Wrong SCLUSTER_INSTANCE_ACCESS_TYPE that should be 'private' or 'public'")
         self.sftp = None
         self._linux_type = 'ubuntu'
 
         # heuristic to tell if I'm using Amazon image name
         # default image has name like 'amzn2-ami-hvm-2.0.20180622.1-x86_64-gp2'
         if 'amzn' in image_name.lower() or 'amazon' in image_name.lower():
-            self.log('Detected Amazon Linux image')
+            logger.info('Detected Amazon Linux image')
             self._linux_type = 'amazon'
         self.run_counter = 0
 
@@ -96,16 +104,16 @@ class Task(backend.Task):
             self.ssh_username = 'ec2-user'
         self.homedir = '/home/' + self.ssh_username
 
-        self.ssh_client = u.ssh_to_task(self)
+        self.ssh_client = u.ssh_to_task(self, os.environ.get('SCLUSTER_INSTANCE_ACCESS_TYPE', "private"))
         self._setup_tmux()
         self._run_raw('mkdir -p ' + self.remote_scratch)
 
         self._can_run = True
 
         if self._is_initialized_fn_present():
-            self.log("reusing previous initialized state")
+            logger.info("reusing previous initialized state")
         else:
-            self.log("running install script")
+            logger.info("running install script")
 
             # bin/bash needed to make self-executable or use with UserData
             self.install_script = '#!/bin/bash\n' + self.install_script
@@ -115,23 +123,21 @@ class Task(backend.Task):
             assert self._is_initialized_fn_present(), f"Install script didn't write to {self._initialized_fn}"
 
         self._mount_efs()
-        self.connect_instructions = f"""
-    To connect to {self.name}
-ssh -i {u.get_keypair_fn()} -o StrictHostKeyChecking=no {self.ssh_username}@{self.public_ip}
-tmux a
-""".strip()
-        self.log("Initialize complete")
-        self.log(self.connect_instructions)
+
+        logger.info("Initialize complete")
+        logger.info(f"To connect to {self.name} ssh -i {u.get_keypair_fn()} "
+                    f"-o StrictHostKeyChecking=no {self.ssh_username}@{self.ip} \n"
+                    f"tmux a".strip())
 
     def _is_initialized_fn_present(self):
-        self.log("Checking for initialization status")
+        logger.info("Checking for initialization status")
         try:
             return 'ok' in self.read(self._initialized_fn)
         except Exception:
             return False
 
     def _setup_tmux(self):
-        self.log("Setting up tmux")
+        logger.info("Setting up tmux")
 
         self.tmux_session = self.name.replace('.', '=')
         self.tmux_window_id = 0
@@ -150,15 +156,15 @@ tmux a
             self._run_raw(f'tmux kill-session -t {self.tmux_session}',
                           ignore_errors=True)
         else:
-            print(
-                "Warning, NCLUSTER_NOKILL_TMUX is on, make sure remote tmux prompt is available or things will hang")
+            logger.warning("Warning, NCLUSTER_NOKILL_TMUX is on, make sure remote tmux prompt "
+                           "is available or things will hang")
 
         self._run_raw(''.join(tmux_cmd))
 
         self._can_run = True
 
     def _mount_efs(self):
-        self.log("Mounting EFS")
+        logger.info("Mounting EFS")
         region = u.get_region()
         efs_id = u.get_efs_dict()[u.get_prefix()]
         dns = f"{efs_id}.efs.{region}.amazonaws.com"
@@ -173,7 +179,7 @@ tmux a
         stdout, stderr = self.run_with_output('df')
         while '/ncluster' not in stdout:
             sleep_sec = 2
-            util.log(f"EFS not yet mounted, sleeping {sleep_sec} seconds")
+            logger.info(f"EFS not yet mounted, sleeping {sleep_sec} seconds")
             time.sleep(sleep_sec)
             self.run(
                 f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /ncluster",
@@ -202,7 +208,7 @@ tmux a
     ):
 
         # TODO(y): make _run_with_output_on_failure default, and delete this
-        if util.is_set('NCLUSTER_RUN_WITH_OUTPUT_ON_FAILURE') or True:
+        if util.is_set('SCLUSTER_RUN_WITH_OUTPUT_ON_FAILURE') or True:
             # experimental version that captures output and prints it on failure
             # redirection things break bash commands, so
             # don't redirect on bash commands like source
@@ -211,14 +217,14 @@ tmux a
             if not util.is_bash_builtin(cmd) or True:
                 return self._run_with_output_on_failure(cmd, non_blocking, ignore_errors, max_wait_sec)
             else:
-                self.log("Found bash built-in, using regular run")
+                logger.info("Found bash built-in, using regular run")
 
         if not self._can_run:
             assert False, "Using .run before initialization finished"
 
         if '\n' in cmd:
             cmds = cmd.split('\n')
-            self.log(
+            logger.info(
                 f"Running {len(cmds)} commands at once, returning status of last")
             status = -1
             for subcmd in cmds:
@@ -230,7 +236,7 @@ tmux a
         if cmd.startswith('#'):  # ignore empty/commented out lines
             return -1
         self.run_counter += 1
-        self.log("tmux> %s", cmd)
+        logger.info("tmux> %s", cmd)
 
         self._cmd = cmd
         self._cmd_fn = f'{self.remote_scratch}/{self.run_counter}.cmd'
@@ -251,9 +257,9 @@ tmux a
             return 0
 
         if not self.wait_for_file(self._status_fn, max_wait_sec=30):
-            self.log(f"Retrying waiting for {self._status_fn}")
+            logger.info(f"Retrying waiting for {self._status_fn}")
         while not self.exists(self._status_fn):
-            self.log(f"Still waiting for {cmd}")
+            logger.info(f"Still waiting for {cmd}")
             self.wait_for_file(self._status_fn, max_wait_sec=30)
         contents = self.read(self._status_fn)
 
@@ -268,7 +274,7 @@ tmux a
             if not ignore_errors:
                 raise RuntimeError(f"Command {cmd} returned status {status}")
             else:
-                self.log(f"Warning: command {cmd} returned status {status}")
+                logger.info(f"Warning: command {cmd} returned status {status}")
 
         return status
 
@@ -278,9 +284,9 @@ tmux a
         check_interval = 0.2
         status_fn = self._status_fn
         if not self.wait_for_file(status_fn, max_wait_sec=30):
-            self.log(f"Retrying waiting for {status_fn}")
+            logger.info(f"Retrying waiting for {status_fn}")
         while not self.exists(status_fn):
-            self.log(f"Still waiting for {self._cmd}")
+            logger.info(f"Still waiting for {self._cmd}")
             self.wait_for_file(status_fn, max_wait_sec=30)
         contents = self.read(status_fn)
 
@@ -293,22 +299,33 @@ tmux a
 
         if status != 0:
             extra_msg = '(ignoring error)' if ignore_errors else '(failing)'
-            if util.is_set('NCLUSTER_RUN_WITH_OUTPUT_ON_FAILURE') or True:
-                self.log(
-                    f"Start failing output {extra_msg}: \n{'*' * 80}\n\n '{self.read(self._out_fn)}'")
-                self.log(f"\n{'*' * 80}\nEnd failing output")
+            if util.is_set('SCLUSTER_RUN_WITH_OUTPUT_ON_FAILURE') or True:
+                logger.info(f"Start failing output {extra_msg}: \n{'*' * 80}\n\n '{self.read(self._out_fn)}'")
+                logger.info(f"\n{'*' * 80}\nEnd failing output")
             if not ignore_errors:
                 raise RuntimeError(f"Command {self._cmd} returned status {status}")
             else:
-                self.log(f"Warning: command {self._cmd} returned status {status}")
+                logger.warning(f"Warning: command {self._cmd} returned status {status}")
 
         return status
 
-    def _run_with_output_on_failure(self, cmd, non_blocking=False,
-                                    ignore_errors=False,
-                                    max_wait_sec=365 * 24 * 3600,
-                                    check_interval=0.2) -> str:
-        """Experimental version of run propagates error messages to client. This command will be default "run" eventually"""
+    def _run_with_output_on_failure(
+        self,
+        cmd,
+        non_blocking=False,
+        ignore_errors=False,
+        max_wait_sec=365 * 24 * 3600,
+        check_interval=0.2
+    ) -> str:
+        """
+        Experimental version of run propagates error messages to client. This command will be default "run" eventually
+        :param cmd:
+        :param non_blocking:
+        :param ignore_errors:
+        :param max_wait_sec:
+        :param check_interval:
+        :return:
+        """
 
         if not self._can_run:
             assert False, "Using .run before initialization finished"
@@ -320,7 +337,7 @@ tmux a
         if cmd.startswith('#'):  # ignore empty/commented out lines
             return ''
         self.run_counter += 1
-        self.log("tmux> %s", cmd)
+        logger.info("tmux> %s", cmd)
 
         self._cmd = cmd
         self._cmd_fn = f'{self.remote_scratch}/{self.run_counter}.cmd'
@@ -348,10 +365,10 @@ tmux a
             return 0
 
         if not self.wait_for_file(self._status_fn, max_wait_sec=60):
-            self.log(f"Retrying waiting for {self._status_fn}")
+            logger.info(f"Retrying waiting for {self._status_fn}")
         elapsed_time = time.time() - start_time
         while not self.exists(self._status_fn) and elapsed_time < max_wait_sec:
-            self.log(f"Still waiting for {cmd}")
+            logger.info(f"Still waiting for {cmd}")
             self.wait_for_file(self._status_fn, max_wait_sec=60)
             elapsed_time = time.time() - start_time
         contents = self.read(self._status_fn)
@@ -365,13 +382,11 @@ tmux a
 
         if status != 0:
             extra_msg = '(ignoring error)' if ignore_errors else '(failing)'
-            self.log(
-                f"Start failing output {extra_msg}: \n{'*' * 80}\n\n '{self.read(self._out_fn)}'")
-            self.log(f"\n{'*' * 80}\nEnd failing output")
+            logger.warning(f"Start failing output {extra_msg}: '{self.read(self._out_fn)}'")
             if not ignore_errors:
                 raise RuntimeError(f"Command {cmd} returned status {status}")
             else:
-                self.log(f"Warning: command {cmd} returned status {status}")
+                logger.info(f"Warning: command {cmd} returned status {status}")
 
         return self.read(self._out_fn)
 
@@ -391,15 +406,14 @@ tmux a
         stderr_str = stderr.read().decode()
         if stdout.channel.recv_exit_status() != 0:
             if not ignore_errors:
-                self.log(f"command ({cmd}) failed with --->")
-                self.log("failing stdout: " + stdout_str)
-                self.log("failing stderr: " + stderr_str)
+                logger.info(f"command ({cmd}) failed with --->")
+                logger.info("failing stdout: " + stdout_str)
+                logger.info("failing stderr: " + stderr_str)
                 assert False, "_run_raw failed (see logs for error)"
 
         return stdout_str, stderr_str
 
-    def upload(self, local_fn: str, remote_fn: str = '',
-               dont_overwrite: bool = False) -> None:
+    def upload(self, local_fn: str, remote_fn: str = '', dont_overwrite: bool = False) -> None:
         """Uploads file to remote instance. If location not specified, dumps it
         into default directory. If remote location has files or directories with the
          same name, behavior is undefined."""
@@ -411,7 +425,7 @@ tmux a
             return
 
         if '#' in local_fn:  # hashes also give problems from shell commands
-            self.log("skipping backup file {local_fn}")
+            logger.info("skipping backup file {local_fn}")
             return
 
         if not self.sftp:
@@ -422,7 +436,7 @@ tmux a
             """Makes remote file execute for locally executable files"""
             mode = oct(os.stat(local_fn_)[stat.ST_MODE])[-3:]
             if '7' in mode:
-                self.log(f"Making {remote_fn_} executable with mode {mode}")
+                logger.info(f"Making {remote_fn_} executable with mode {mode}")
                 # use raw run, in case tmux is unavailable
                 self._run_raw(f"chmod {mode} {remote_fn_}")
 
@@ -455,7 +469,7 @@ tmux a
         if not remote_fn:
             remote_fn = os.path.basename(local_fn)
 
-        self.log('uploading ' + local_fn + ' to ' + remote_fn)
+        logger.info('uploading ' + local_fn + ' to ' + remote_fn)
         remote_fn = remote_fn.replace('~', self.homedir)
 
         if '/' in remote_fn:
@@ -463,7 +477,7 @@ tmux a
             assert self.exists(
                 remote_dir), f"Remote dir {remote_dir} doesn't exist"
         if dont_overwrite and self.exists(remote_fn):
-            self.log("Remote file %s exists, skipping" % (remote_fn,))
+            logger.info("Remote file %s exists, skipping" % (remote_fn,))
             return
 
         assert os.path.exists(local_fn), f"{local_fn} not found"
@@ -478,7 +492,7 @@ tmux a
             maybe_fix_mode(local_fn, remote_fn)
 
     def download(self, remote_fn, local_fn=''):
-        self.log("downloading %s" % remote_fn)
+        logger.info("downloading %s" % remote_fn)
         # sometimes open_sftp fails with Administratively prohibited, do retries
         # root cause could be too many SSH connections being open
         # https://unix.stackexchange.com/questions/14160/ssh-tunneling-error-channel-1-open-failed-administratively-prohibited-open
@@ -487,7 +501,7 @@ tmux a
                                             'self.ssh_client.open_sftp')
         if not local_fn:
             local_fn = os.path.basename(remote_fn)
-            self.log("downloading %s to %s" % (remote_fn, local_fn))
+            logger.info("downloading %s to %s" % (remote_fn, local_fn))
         self.sftp.get(remote_fn, local_fn)
 
     def exists(self, remote_fn):
@@ -529,19 +543,19 @@ tmux a
         """Returns logging directory, creating one if necessary. See "Logdir" section
         of design doc on naming convention"""
 
-        run_name = ncluster_globals.get_run_for_task(self)
-        logdir = ncluster_globals.get_logdir(run_name)
+        run_name = scluster_globals.get_run_for_task(self)
+        logdir = scluster_globals.get_logdir(run_name)
         if logdir:
             return logdir
 
         # create logdir. Only single task in a group creates the logdir
-        if ncluster_globals.is_chief(self, run_name):
+        if scluster_globals.is_chief(self, run_name):
             chief = self
         else:
-            chief = ncluster_globals.get_chief(run_name)
+            chief = scluster_globals.get_chief(run_name)
 
         chief.setup_logdir()
-        return ncluster_globals.get_logdir(run_name)
+        return scluster_globals.get_logdir(run_name)
 
         # release lock
 
@@ -550,9 +564,9 @@ tmux a
 
         """Create logdir for task/job/run
         """
-        run_name = ncluster_globals.get_run_for_task(self)
-        self.log("Creating logdir for run " + run_name)
-        logdir_root = ncluster_globals.LOGDIR_ROOT
+        run_name = scluster_globals.get_run_for_task(self)
+        logger.info("Creating logdir for run " + run_name)
+        logdir_root = scluster_globals.LOGDIR_ROOT
         assert logdir_root
 
         self.run(f'mkdir -p {logdir_root}')
@@ -565,11 +579,11 @@ tmux a
         while logdir in stdout:
             counter += 1
             new_logdir = f'{logdir_root}/{run_name}.{counter:02d}'
-            self.log(f'Warning, logdir {logdir} exists, deduping to {new_logdir}')
+            logger.info(f'Warning, logdir {logdir} exists, deduping to {new_logdir}')
             logdir = new_logdir
         self.run(f'mkdir -p {logdir}')
 
-        ncluster_globals.set_logdir(run_name, logdir)
+        scluster_globals.set_logdir(run_name, logdir)
         return logdir
 
         # legacy methods
@@ -607,13 +621,13 @@ class Run(backend.Run):
         self.name = name
         self.jobs = jobs
         self.kwargs = kwargs
-        util.log(f"Choosing placement_group for run {name}")
+        logger.info(f"Choosing placement_group for run {name}")
         self.placement_group = name + '-' + util.random_id()
 
     @property
     def logdir(self):
         # querying logdir has a side-effect of creation, so do it on chief task
-        chief_task = ncluster_globals.get_chief(self.name)
+        chief_task = scluster_globals.get_chief(self.name)
         return chief_task.logdir
 
     # TODO: currently this is synchronous, use non_blocking wrapper like in Job to parallelize methods
@@ -676,21 +690,15 @@ def make_task(
 
     """
 
-    ncluster_globals.task_launched = True
-
-    def log(*_args):
-        if logging_task:
-            logging_task.log(*_args)
-        else:
-            util.log(*_args)
+    scluster_globals.task_launched = True
 
     # if name not specified, use name which is the same across script invocations for given image/instance-type
-    name = ncluster_globals.auto_assign_task_name_if_needed(name, instance_type,
+    name = scluster_globals.auto_assign_task_name_if_needed(name, instance_type,
                                                             image_name)
 
     if not instance_type:
-        instance_type = os.environ.get('NCLUSTER_INSTANCE', 't3.micro')
-        log("Using instance " + instance_type)
+        instance_type = os.environ.get('SCLUSTER_INSTANCE', 't3.micro')
+        logger.info("Using instance " + instance_type)
 
     _set_aws_environment()
     if create_resources:
@@ -698,22 +706,22 @@ def make_task(
     else:
         pass
 
-    run: Run = ncluster_globals.get_run_object(run_name)
+    run: Run = scluster_globals.get_run_object(run_name)
     placement_group = ''
     if u.instance_supports_placement_groups(instance_type) and run:
         placement_group = run.placement_group
-        log(f"Launching into placement_group group {placement_group}")
+        logger.info(f"Launching into placement_group group {placement_group}")
         u.maybe_create_placement_group(run.placement_group)
 
     if not image_name:
-        image_name = os.environ.get('NCLUSTER_IMAGE', GENERIC_SMALL_IMAGE)
-    log("Using image " + image_name)
+        image_name = os.environ.get('SCLUSTER_IMAGE', GENERIC_SMALL_IMAGE)
+    logger.info("Using image " + image_name)
 
     if preemptible is None:
-        preemptible = os.environ.get('NCLUSTER_PREEMPTIBLE', False)
+        preemptible = os.environ.get('SCLUSTER_PREEMPTIBLE', False)
         preemptible = bool(preemptible)
         if preemptible:
-            log("Using preemptible instances")
+            logger.info("Using preemptible instances")
 
     image = u.lookup_image(image_name)
     keypair = u.get_keypair()
@@ -727,9 +735,9 @@ def make_task(
 
     # create the instance if not present
     if instance:
-        log(f"Reusing {instance}")
+        logger.info(f"Reusing {instance}")
     else:
-        log(f"Allocating {instance_type} for task {name}")
+        logger.info(f"Allocating {instance_type} for task {name}")
         args = dict(
             ImageId=image.id,
             InstanceType=instance_type,
@@ -768,8 +776,10 @@ def make_task(
             }]
 
         # Use high throughput disk (0.065/iops-month = about $1/hour)
-        if 'NCLUSTER_AWS_FAST_ROOTDISK' in os.environ:
-            assert not disk_size, f"Specified both disk_size {disk_size} and $NCLUSTER_AWS_FAST_ROOTDISK, they are incompatible as $NCLUSTER_AWS_FAST_ROOTDISK hardwired disk size"
+        if 'SCLUSTER_AWS_FAST_ROOTDISK' in os.environ:
+            assert not disk_size, f"Specified both disk_size {disk_size} " \
+                f"and $SCLUSTER_AWS_FAST_ROOTDISK, they are incompatible as $NCLUSTER_AWS_FAST_ROOTDISK " \
+                f"hardwired disk size"
 
             ebs = {
                 'VolumeSize': 500,
@@ -789,23 +799,24 @@ def make_task(
             else:
                 instances = ec2.create_instances(**args)
         except Exception as e:
-            log(f"Instance creation for {name} failed with ({e})")
-            log(
-                "You can change availability zone using export NCLUSTER_ZONE=...")
-            log("Terminating")
-            os.kill(os.getpid(),
-                    signal.SIGINT)  # sys.exit() doesn't work inside thread
+            logger.info(f"Instance creation for {name} failed with ({e})")
+            logger.info("You can change availability zone using export SCLUSTER_ZONE=...")
+            logger.info("Terminating")
+            os.kill(os.getpid(), signal.SIGINT)  # sys.exit() doesn't work inside thread
 
         assert instances, f"ec2.create_instances returned {instances}"
-        log(f"Allocated {len(instances)} instances")
+        logger.info(f"Allocated {len(instances)} instances")
         instance = instances[0]
 
-    task = Task(name, instance=instance,
-                install_script=install_script,
-                image_name=image_name,
-                instance_type=instance_type)
+    task = Task(
+        name,
+        instance=instance,
+        install_script=install_script,
+        image_name=image_name,
+        instance_type=instance_type
+    )
 
-    ncluster_globals.register_task(task, run_name)
+    scluster_globals.register_task(task, run_name)
     return task
 
 
@@ -842,9 +853,9 @@ def make_job(
     if create_resources:
         _maybe_create_resources(tasks[0])
 
-    name = ncluster_globals.auto_assign_job_name_if_needed(name)
-    run_name = ncluster_globals.auto_assign_run_name_if_needed(run_name)
-    _run = ncluster_globals.create_run_if_needed(run_name, make_run)
+    name = scluster_globals.auto_assign_job_name_if_needed(name)
+    run_name = scluster_globals.auto_assign_run_name_if_needed(run_name)
+    _run = scluster_globals.create_run_if_needed(run_name, make_run)
 
     job = Job(name=name, tasks=tasks, run_name=run_name, **kwargs)
 
@@ -863,7 +874,7 @@ def make_job(
         except Exception as e:
             exceptions.append(e)
 
-    util.log("Creating threads")
+    logger.info("Creating threads")
     threads = [threading.Thread(name=f'make_task_{i}',
                                 target=make_task_fn, args=[i])
                for i in range(num_tasks)]
@@ -893,7 +904,7 @@ def make_job(
 
 def make_run(name) -> Run:
     run = Run(name)
-    ncluster_globals.register_run(name, run)
+    scluster_globals.register_run(name, run)
     return run
 
 
@@ -932,29 +943,29 @@ def _maybe_wait_for_initializing_instance(instance):
 def _maybe_create_resources(logging_task: Task = None):
     """Use heuristics to decide to possibly create resources"""
 
-    def log(*args):
-        if logging_task:
-            logging_task.log(*args)
-        else:
-            util.log(*args)
-
     def should_create_resources():
         """Check if gateway, keypair, vpc exist."""
         prefix = u.get_prefix()
         if u.get_keypair_name() not in u.get_keypair_dict():
-            log(f"Missing {u.get_keypair_name()} keypair, creating resources")
+            logger.info(f"Missing {u.get_keypair_name()} keypair, creating resources")
             return True
         vpcs = u.get_vpc_dict()
-        if prefix not in vpcs:
-            log(f"Missing {prefix} vpc, creating resources")
+        vpc_name = u.get_vpc_name()
+        if vpc_name not in vpcs:
+            logger.info(f"Missing {vpc_name} vpc, creating resources")
             return True
-        vpc = vpcs[prefix]
+        vpc = vpcs[u.get_vpc_name()]
         gateways = u.get_gateway_dict(vpc)
-        if prefix not in gateways:
-            log(f"Missing {prefix} gateway, creating resources")
+        gateway_name = u.get_gateway_name()
+        if gateway_name not in gateways:
+            logger.info(f"Missing {gateway_name} gateway, creating resources")
+            return True
+        efs = u.get_efs_dict()
+        efs_name = u.get_efs_name()
+        if efs_name not in efs:
+            logger.info(f"Missing {efs_name} efs, creating resources")
             return True
         return False
-
     try:
         # this locking is approximate, still possible for threads to slip through
         if os.path.exists(AWS_LOCK_FN):
@@ -979,7 +990,7 @@ def _maybe_create_resources(logging_task: Task = None):
                 f'{os.getpid()}-{int(time.time())}-{logging_task.name if logging_task else ""}')
 
         if not should_create_resources():
-            util.log("Resources already created, no-op")
+            logger.info("Resources already created, no-op")
             os.remove(AWS_LOCK_FN)
             return
 
@@ -990,8 +1001,8 @@ def _maybe_create_resources(logging_task: Task = None):
 
 
 def _set_aws_environment(task: Task = None):
-    """Sets up AWS environment from NCLUSTER environment variables"""
-    current_zone = os.environ.get('NCLUSTER_ZONE', '')
+    """Sets up AWS environment from SCLUSTER environment variables"""
+    current_zone = os.environ.get('SCLUSTER_ZONE', '')
     current_region = os.environ.get('AWS_DEFAULT_REGION', '')
 
     def log(*args):
@@ -1002,7 +1013,7 @@ def _set_aws_environment(task: Task = None):
 
     if current_region and current_zone:
         assert current_zone.startswith(
-            current_region), f'Current zone "{current_zone}" ($NCLUSTER_ZONE) is not ' \
+            current_region), f'Current zone "{current_zone}" ($SCLUSTER_ZONE) is not ' \
             f'in current region "{current_region} ($AWS_DEFAULT_REGION)'
         assert u.get_session().region_name == current_region  # setting from ~/.aws
 
@@ -1012,18 +1023,17 @@ def _set_aws_environment(task: Task = None):
         os.environ['AWS_DEFAULT_REGION'] = current_region
 
     # neither zone nor region not set, use default setting for region
-    # if default is not set, use NCLUSTER_DEFAULT_REGION
+    # if default is not set, use SCLUSTER_DEFAULT_REGION
     if not current_region:
         current_region = u.get_session().region_name
         if not current_region:
-            log(f"No default region available, using {NCLUSTER_DEFAULT_REGION}")
-            current_region = NCLUSTER_DEFAULT_REGION
+            log(f"No default region available, using {SCLUSTER_DEFAULT_REGION}")
+            current_region = SCLUSTER_DEFAULT_REGION
         os.environ['AWS_DEFAULT_REGION'] = current_region
 
     # zone not set, use first zone of the region
     #  if not current_zone:
     #    current_zone = current_region + 'a'
-    #    os.environ['NCLUSTER_ZONE'] = current_zone
+    #    os.environ['SCLUSTER_ZONE'] = current_zone
 
-    log(f"Using account {u.get_account_number()}, region {current_region}, "
-        f"zone {current_zone}")
+    logger.info(f"Using account {u.get_account_number()}, region {current_region}, zone {current_zone}")

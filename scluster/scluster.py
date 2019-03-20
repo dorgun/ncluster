@@ -4,7 +4,7 @@ from . import backend
 from . import aws_util as u
 import collections
 
-from . import ncluster_globals
+from . import scluster_globals
 
 _backend: type(backend) = backend
 
@@ -23,14 +23,14 @@ def set_backend(backend_name: str):
     global _backend, _backend_name
     _backend_name = backend_name
 
-    assert not ncluster_globals.task_launched, "Not allowed to change backend after launching a task (this pattern is error-prone)"
+    assert not scluster_globals.task_launched, "Not allowed to change backend after launching a task (this pattern is error-prone)"
     if backend_name == 'aws':
         _backend = aws_backend
     elif backend_name == 'local':
         _backend = local_backend
     else:
         assert False, f"Unknown backend {backend_name}"
-    ncluster_globals.LOGDIR_ROOT = _backend.LOGDIR_ROOT
+    scluster_globals.LOGDIR_ROOT = _backend.LOGDIR_ROOT
 
 
 def use_aws():

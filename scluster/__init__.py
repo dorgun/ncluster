@@ -6,21 +6,23 @@ from . import util
 from . import local_backend
 from . import backend  # TODO: remove?
 
-from .ncluster import get_backend
-from .ncluster import set_backend
-from .ncluster import running_locally
+from .scluster import get_backend
+from .scluster import set_backend
+from .scluster import running_locally
 
-from .ncluster import use_aws
-from .ncluster import use_local
+from .scluster import use_aws
+from .scluster import use_local
 
-from .ncluster import make_task
-from .ncluster import make_job
-from .ncluster import make_run
-from .ncluster import get_zone
-from .ncluster import get_region
-from .ncluster import set_logdir_root
-from .ncluster import get_logdir_root
+from .scluster import make_task
+from .scluster import make_job
+from .scluster import make_run
+from .scluster import get_zone
+from .scluster import get_region
+from .scluster import set_logdir_root
+from .scluster import get_logdir_root
 
+import logging
+logging.getLogger("botocore").setLevel(logging.ERROR)
 
 # set default backend from environment
 if 'NCLUSTER_BACKEND' in os.environ:
