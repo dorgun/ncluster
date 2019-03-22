@@ -875,14 +875,12 @@ def make_job(
             exceptions.append(e)
 
     logger.info("Creating threads")
-    threads = [threading.Thread(name=f'make_task_{i}',
-                                target=make_task_fn, args=[i])
-               for i in range(num_tasks)]
+    threads = [threading.Thread(name=f'make_task_{i}', target=make_task_fn, args=[i]) for i in range(num_tasks)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-    print("Exception are ", exceptions)
+    logger.info(f"Exception are {exceptions}")
     if exceptions:
         raise exceptions[0]
 
