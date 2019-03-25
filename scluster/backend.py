@@ -125,7 +125,7 @@ class Task:
         start_time = time.time()
         while True:
             if time.time() - start_time > max_wait_sec:
-                util.log(f"Timeout exceeded ({max_wait_sec} sec) for {fn}")
+                # util.log(f"Timeout exceeded ({max_wait_sec} sec) for {fn}")
                 return False
             if not self.exists(fn):
                 time.sleep(check_interval)
@@ -213,8 +213,7 @@ class Job:
             except Exception as e:
                 exceptions.append(e)
 
-        threads = [threading.Thread(name=f'task_{method}_{i}',
-                                    target=task_run, args=[t])
+        threads = [threading.Thread(name=f'task_{method}_{i}', target=task_run, args=[t])
                    for i, t in enumerate(self.tasks)]
         for thread in threads:
             thread.start()

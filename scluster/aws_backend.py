@@ -30,8 +30,6 @@ LOGDIR_ROOT = '/ncluster/runs'
 # some image which is fast to load, to use for quick runs
 GENERIC_SMALL_IMAGE = 'amzn2-ami-hvm-2.0.20180622.1-x86_64-gp2'
 
-logger = logging.getLogger(__name__)
-
 
 class Task(backend.Task):
     """AWS task is initialized with an AWS instance and handles initialization,
@@ -60,7 +58,7 @@ class Task(backend.Task):
         self._cmd = None
         self._status_fn = None  # location of output of last status
         self.last_status = -1
-
+        self.__logger = logging.getLogger(__name__)
         self._can_run = False  # indicates that things needed for .run were created
         self.initialize_called = False
 
@@ -82,7 +80,7 @@ class Task(backend.Task):
         # heuristic to tell if I'm using Amazon image name
         # default image has name like 'amzn2-ami-hvm-2.0.20180622.1-x86_64-gp2'
         if 'amzn' in image_name.lower() or 'amazon' in image_name.lower():
-            logger.info('Detected Amazon Linux image')
+            self.__logger.info('Detected Amazon Linux image')
             self._linux_type = 'amazon'
         self.run_counter = 0
 
@@ -111,9 +109,9 @@ class Task(backend.Task):
         self._can_run = True
 
         if self._is_initialized_fn_present():
-            logger.info("reusing previous initialized state")
+            self.__logger.info("reusing previous initialized state")
         else:
-            logger.info("running install script")
+            self.__logger.info("running install script")
 
             # bin/bash needed to make self-executable or use with UserData
             self.install_script = '#!/bin/bash\n' + self.install_script
@@ -124,20 +122,20 @@ class Task(backend.Task):
 
         self._mount_efs()
 
-        logger.info("Initialize complete")
-        logger.info(f"To connect to {self.name} ssh -i {u.get_keypair_fn()} "
+        self.__logger.info("Initialize complete")
+        self.__logger.info(f"To connect to {self.name} ssh -i {u.get_keypair_fn()} "
                     f"-o StrictHostKeyChecking=no {self.ssh_username}@{self.ip} \n"
                     f"tmux a".strip())
 
     def _is_initialized_fn_present(self):
-        logger.info("Checking for initialization status")
+        self.__logger.info("Checking for initialization status")
         try:
             return 'ok' in self.read(self._initialized_fn)
         except Exception:
             return False
 
     def _setup_tmux(self):
-        logger.info("Setting up tmux")
+        self.__logger.info("Setting up tmux")
 
         self.tmux_session = self.name.replace('.', '=')
         self.tmux_window_id = 0
@@ -156,7 +154,7 @@ class Task(backend.Task):
             self._run_raw(f'tmux kill-session -t {self.tmux_session}',
                           ignore_errors=True)
         else:
-            logger.warning("Warning, NCLUSTER_NOKILL_TMUX is on, make sure remote tmux prompt "
+            self.__logger.warning("Warning, NCLUSTER_NOKILL_TMUX is on, make sure remote tmux prompt "
                            "is available or things will hang")
 
         self._run_raw(''.join(tmux_cmd))
@@ -164,7 +162,7 @@ class Task(backend.Task):
         self._can_run = True
 
     def _mount_efs(self):
-        logger.info("Mounting EFS")
+        self.__logger.info("Mounting EFS")
         region = u.get_region()
         efs_id = u.get_efs_dict()[u.get_prefix()]
         dns = f"{efs_id}.efs.{region}.amazonaws.com"
@@ -179,7 +177,7 @@ class Task(backend.Task):
         stdout, stderr = self.run_with_output('df')
         while '/ncluster' not in stdout:
             sleep_sec = 2
-            logger.info(f"EFS not yet mounted, sleeping {sleep_sec} seconds")
+            self.__logger.info(f"EFS not yet mounted, sleeping {sleep_sec} seconds")
             time.sleep(sleep_sec)
             self.run(
                 f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /ncluster",
@@ -217,14 +215,14 @@ class Task(backend.Task):
             if not util.is_bash_builtin(cmd) or True:
                 return self._run_with_output_on_failure(cmd, non_blocking, ignore_errors, max_wait_sec)
             else:
-                logger.info("Found bash built-in, using regular run")
+                self.__logger.info("Found bash built-in, using regular run")
 
         if not self._can_run:
             assert False, "Using .run before initialization finished"
 
         if '\n' in cmd:
             cmds = cmd.split('\n')
-            logger.info(
+            self.__logger.info(
                 f"Running {len(cmds)} commands at once, returning status of last")
             status = -1
             for subcmd in cmds:
@@ -236,7 +234,7 @@ class Task(backend.Task):
         if cmd.startswith('#'):  # ignore empty/commented out lines
             return -1
         self.run_counter += 1
-        logger.info("tmux> %s", cmd)
+        self.__logger.info("tmux> %s", cmd)
 
         self._cmd = cmd
         self._cmd_fn = f'{self.remote_scratch}/{self.run_counter}.cmd'
@@ -257,9 +255,9 @@ class Task(backend.Task):
             return 0
 
         if not self.wait_for_file(self._status_fn, max_wait_sec=30):
-            logger.info(f"Retrying waiting for {self._status_fn}")
+            self.__logger.info(f"Retrying waiting for {self._status_fn}")
         while not self.exists(self._status_fn):
-            logger.info(f"Still waiting for {cmd}")
+            self.__logger.info(f"Still waiting for {cmd}")
             self.wait_for_file(self._status_fn, max_wait_sec=30)
         contents = self.read(self._status_fn)
 
@@ -274,7 +272,7 @@ class Task(backend.Task):
             if not ignore_errors:
                 raise RuntimeError(f"Command {cmd} returned status {status}")
             else:
-                logger.info(f"Warning: command {cmd} returned status {status}")
+                self.__logger.info(f"Warning: command {cmd} returned status {status}")
 
         return status
 
@@ -284,9 +282,9 @@ class Task(backend.Task):
         check_interval = 0.2
         status_fn = self._status_fn
         if not self.wait_for_file(status_fn, max_wait_sec=30):
-            logger.info(f"Retrying waiting for {status_fn}")
+            self.__logger.info(f"Retrying waiting for {status_fn}")
         while not self.exists(status_fn):
-            logger.info(f"Still waiting for {self._cmd}")
+            self.__logger.info(f"Still waiting for {self._cmd}")
             self.wait_for_file(status_fn, max_wait_sec=30)
         contents = self.read(status_fn)
 
@@ -300,12 +298,12 @@ class Task(backend.Task):
         if status != 0:
             extra_msg = '(ignoring error)' if ignore_errors else '(failing)'
             if util.is_set('SCLUSTER_RUN_WITH_OUTPUT_ON_FAILURE') or True:
-                logger.info(f"Start failing output {extra_msg}: \n{'*' * 80}\n\n '{self.read(self._out_fn)}'")
-                logger.info(f"\n{'*' * 80}\nEnd failing output")
+                self.__logger.info(f"Start failing output {extra_msg}: \n{'*' * 80}\n\n '{self.read(self._out_fn)}'")
+                self.__logger.info(f"\n{'*' * 80}\nEnd failing output")
             if not ignore_errors:
                 raise RuntimeError(f"Command {self._cmd} returned status {status}")
             else:
-                logger.warning(f"Warning: command {self._cmd} returned status {status}")
+                self.__logger.warning(f"Warning: command {self._cmd} returned status {status}")
 
         return status
 
@@ -337,7 +335,7 @@ class Task(backend.Task):
         if cmd.startswith('#'):  # ignore empty/commented out lines
             return ''
         self.run_counter += 1
-        logger.info("tmux> %s", cmd)
+        self.__logger.info("tmux> %s", cmd)
 
         self._cmd = cmd
         self._cmd_fn = f'{self.remote_scratch}/{self.run_counter}.cmd'
@@ -365,10 +363,10 @@ class Task(backend.Task):
             return 0
 
         if not self.wait_for_file(self._status_fn, max_wait_sec=60):
-            logger.info(f"Retrying waiting for {self._status_fn}")
+            self.__logger.info(f"Retrying waiting for {self._status_fn}")
         elapsed_time = time.time() - start_time
         while not self.exists(self._status_fn) and elapsed_time < max_wait_sec:
-            logger.info(f"Still waiting for {cmd}")
+            self.__logger.info(f"Still waiting for {cmd}")
             self.wait_for_file(self._status_fn, max_wait_sec=60)
             elapsed_time = time.time() - start_time
         contents = self.read(self._status_fn)
@@ -382,11 +380,11 @@ class Task(backend.Task):
 
         if status != 0:
             extra_msg = '(ignoring error)' if ignore_errors else '(failing)'
-            logger.warning(f"Start failing output {extra_msg}: '{self.read(self._out_fn)}'")
+            self.__logger.warning(f"Start failing output {extra_msg}: '{self.read(self._out_fn)}'")
             if not ignore_errors:
                 raise RuntimeError(f"Command {cmd} returned status {status}")
             else:
-                logger.info(f"Warning: command {cmd} returned status {status}")
+                self.__logger.info(f"Warning: command {cmd} returned status {status}")
 
         return self.read(self._out_fn)
 
@@ -406,9 +404,9 @@ class Task(backend.Task):
         stderr_str = stderr.read().decode()
         if stdout.channel.recv_exit_status() != 0:
             if not ignore_errors:
-                logger.info(f"command ({cmd}) failed with --->")
-                logger.info("failing stdout: " + stdout_str)
-                logger.info("failing stderr: " + stderr_str)
+                self.__logger.info(f"command ({cmd}) failed with --->")
+                self.__logger.info("failing stdout: " + stdout_str)
+                self.__logger.info("failing stderr: " + stderr_str)
                 assert False, "_run_raw failed (see logs for error)"
 
         return stdout_str, stderr_str
@@ -425,7 +423,7 @@ class Task(backend.Task):
             return
 
         if '#' in local_fn:  # hashes also give problems from shell commands
-            logger.info("skipping backup file {local_fn}")
+            self.__logger.info("skipping backup file {local_fn}")
             return
 
         if not self.sftp:
@@ -436,7 +434,7 @@ class Task(backend.Task):
             """Makes remote file execute for locally executable files"""
             mode = oct(os.stat(local_fn_)[stat.ST_MODE])[-3:]
             if '7' in mode:
-                logger.info(f"Making {remote_fn_} executable with mode {mode}")
+                self.__logger.info(f"Making {remote_fn_} executable with mode {mode}")
                 # use raw run, in case tmux is unavailable
                 self._run_raw(f"chmod {mode} {remote_fn_}")
 
@@ -469,7 +467,7 @@ class Task(backend.Task):
         if not remote_fn:
             remote_fn = os.path.basename(local_fn)
 
-        logger.info('uploading ' + local_fn + ' to ' + remote_fn)
+        self.__logger.info('uploading ' + local_fn + ' to ' + remote_fn)
         remote_fn = remote_fn.replace('~', self.homedir)
 
         if '/' in remote_fn:
@@ -477,7 +475,7 @@ class Task(backend.Task):
             assert self.exists(
                 remote_dir), f"Remote dir {remote_dir} doesn't exist"
         if dont_overwrite and self.exists(remote_fn):
-            logger.info("Remote file %s exists, skipping" % (remote_fn,))
+            self.__logger.info("Remote file %s exists, skipping" % (remote_fn,))
             return
 
         assert os.path.exists(local_fn), f"{local_fn} not found"
@@ -492,7 +490,7 @@ class Task(backend.Task):
             maybe_fix_mode(local_fn, remote_fn)
 
     def download(self, remote_fn, local_fn=''):
-        logger.info("downloading %s" % remote_fn)
+        self.__logger.info("downloading %s" % remote_fn)
         # sometimes open_sftp fails with Administratively prohibited, do retries
         # root cause could be too many SSH connections being open
         # https://unix.stackexchange.com/questions/14160/ssh-tunneling-error-channel-1-open-failed-administratively-prohibited-open
@@ -501,7 +499,7 @@ class Task(backend.Task):
                                             'self.ssh_client.open_sftp')
         if not local_fn:
             local_fn = os.path.basename(remote_fn)
-            logger.info("downloading %s to %s" % (remote_fn, local_fn))
+            self.__logger.info("downloading %s to %s" % (remote_fn, local_fn))
         self.sftp.get(remote_fn, local_fn)
 
     def exists(self, remote_fn):
@@ -509,12 +507,12 @@ class Task(backend.Task):
         return 'No such file' not in stdout
 
     def write(self, remote_fn, contents):
-        tmp_fn = self.local_scratch + '/' + str(util.now_micros())
+        tmp_fn = self.local_scratch + '/' + self.name + "_" + str(self.run_counter) + "." + remote_fn.split(".")[-1]
         open(tmp_fn, 'w').write(contents)
         self.upload(tmp_fn, remote_fn)
 
     def read(self, remote_fn):
-        tmp_fn = self.local_scratch + '/' + str(util.now_micros())
+        tmp_fn = self.local_scratch + '/' + self.name + "_" + str(self.run_counter) + "." + remote_fn.split(".")[-1]
         self.download(remote_fn, tmp_fn)
         return open(tmp_fn).read()
 
@@ -565,7 +563,7 @@ class Task(backend.Task):
         """Create logdir for task/job/run
         """
         run_name = scluster_globals.get_run_for_task(self)
-        logger.info("Creating logdir for run " + run_name)
+        self.__logger.info("Creating logdir for run " + run_name)
         logdir_root = scluster_globals.LOGDIR_ROOT
         assert logdir_root
 
@@ -579,7 +577,7 @@ class Task(backend.Task):
         while logdir in stdout:
             counter += 1
             new_logdir = f'{logdir_root}/{run_name}.{counter:02d}'
-            logger.info(f'Warning, logdir {logdir} exists, deduping to {new_logdir}')
+            self.__logger.info(f'Warning, logdir {logdir} exists, deduping to {new_logdir}')
             logdir = new_logdir
         self.run(f'mkdir -p {logdir}')
 
@@ -614,14 +612,14 @@ class Run(backend.Run):
     def __init__(self, name='', **kwargs):
         """Creates a run. If install_script is specified, it's used as default
         install_script for all jobs (can be overridden by Job constructor)"""
-
+        self.__logger = logging.getLogger(__name__)
         assert name, "Must specify name for current run"
 
         jobs = []
         self.name = name
         self.jobs = jobs
         self.kwargs = kwargs
-        logger.info(f"Choosing placement_group for run {name}")
+        self.__logger.info(f"Choosing placement_group for run {name}")
         self.placement_group = name + '-' + util.random_id()
 
     @property
@@ -689,7 +687,7 @@ def make_task(
     Returns:
 
     """
-
+    logger = logging.getLogger(__name__)
     scluster_globals.task_launched = True
 
     # if name not specified, use name which is the same across script invocations for given image/instance-type
@@ -842,6 +840,7 @@ def make_job(
     Returns:
 
     """
+    logger = logging.getLogger(__name__)
     assert num_tasks > 0, f"Can't create job with {num_tasks} tasks"
     assert name.count(
         '.') <= 1, "Job name has too many .'s (see ncluster design: Run/Job/Task hierarchy for  convention)"
@@ -909,14 +908,14 @@ def make_run(name) -> Run:
 # TODO: this method and a few others are backend specific, document in API doc
 def _maybe_start_instance(instance):
     """Starts instance if it's stopped, no-op otherwise."""
-
+    logger = logging.getLogger(__name__)
     if not instance:
         return
 
     if instance.state['Name'] == 'stopped':
         instance.start()
         while True:
-            print(f"Waiting  for {instance} to start.")
+            logger.info(f"Waiting  for {instance} to start.")
             instance.reload()
             if instance.state['Name'] == 'running':
                 break
@@ -925,13 +924,14 @@ def _maybe_start_instance(instance):
 
 def _maybe_wait_for_initializing_instance(instance):
     """Starts instance if it's stopped, no-op otherwise."""
+    logger = logging.getLogger(__name__)
 
     if not instance:
         return
 
     if instance.state['Name'] == 'initializing':
         while True:
-            print(f"Waiting  for {instance} to leave state 'initializing'.")
+            logger.info(f"Waiting  for {instance} to leave state 'initializing'.")
             instance.reload()
             if instance.state['Name'] == 'running':
                 break
@@ -940,6 +940,7 @@ def _maybe_wait_for_initializing_instance(instance):
 
 def _maybe_create_resources(logging_task: Task = None):
     """Use heuristics to decide to possibly create resources"""
+    logger = logging.getLogger(__name__)
 
     def should_create_resources():
         """Check if gateway, keypair, vpc exist."""
@@ -969,14 +970,14 @@ def _maybe_create_resources(logging_task: Task = None):
         if os.path.exists(AWS_LOCK_FN):
             pid, ts, lock_taskname = open(AWS_LOCK_FN).read().split('-')
             ts = int(ts)
-            log(f"waiting for aws resource creation, another resource initiation was "
-                f"initiated {int(time.time() - ts)} seconds ago by "
-                f"{lock_taskname}, delete lock file "
-                f"{AWS_LOCK_FN} if this is an error")
+            logger.info(f"waiting for aws resource creation, another resource initiation was "
+                        f"initiated {int(time.time() - ts)} seconds ago by "
+                        f"{lock_taskname}, delete lock file "
+                        f"{AWS_LOCK_FN} if this is an error")
             while True:
                 if os.path.exists(AWS_LOCK_FN):
-                    log(f"waiting for lock file {AWS_LOCK_FN} to get deleted "
-                        f"initiated {int(time.time() - ts)} seconds ago by ")
+                    logger.info(f"waiting for lock file {AWS_LOCK_FN} to get deleted "
+                                f"initiated {int(time.time() - ts)} seconds ago by ")
                     time.sleep(2)
                     continue
                 else:
@@ -1002,6 +1003,7 @@ def _set_aws_environment(task: Task = None):
     """Sets up AWS environment from SCLUSTER environment variables"""
     current_zone = os.environ.get('SCLUSTER_ZONE', '')
     current_region = os.environ.get('AWS_DEFAULT_REGION', '')
+    logger = logging.getLogger(__name__)
 
     def log(*args):
         if task:
@@ -1028,10 +1030,5 @@ def _set_aws_environment(task: Task = None):
             log(f"No default region available, using {SCLUSTER_DEFAULT_REGION}")
             current_region = SCLUSTER_DEFAULT_REGION
         os.environ['AWS_DEFAULT_REGION'] = current_region
-
-    # zone not set, use first zone of the region
-    #  if not current_zone:
-    #    current_zone = current_region + 'a'
-    #    os.environ['SCLUSTER_ZONE'] = current_zone
 
     logger.info(f"Using account {u.get_account_number()}, region {current_region}, zone {current_zone}")
