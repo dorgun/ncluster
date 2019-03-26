@@ -166,35 +166,25 @@ class Task(backend.Task):
         region = u.get_region()
         efs_id = u.get_efs_dict()[u.get_prefix()]
         dns = f"{efs_id}.efs.{region}.amazonaws.com"
-        self.run('sudo mkdir -p /ncluster')
+        self.run('sudo mkdir -p /scluster')
 
         # ignore error on remount (efs already mounted)
         self.run(
-            f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /ncluster",
+            f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /scluster",
             ignore_errors=True)
 
         # sometimes mount command doesn't work, make sure it's really mounted before returning
         stdout, stderr = self.run_with_output('df')
-        while '/ncluster' not in stdout:
+        while '/scluster' not in stdout:
             sleep_sec = 2
             self.__logger.info(f"EFS not yet mounted, sleeping {sleep_sec} seconds")
             time.sleep(sleep_sec)
             self.run(
-                f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /ncluster",
+                f"sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 {dns}:/ /scluster",
                 ignore_errors=True)
             stdout, stderr = self.run_with_output('df')
 
-        self.run('sudo chmod 777 /ncluster')
-
-        # Hack below may no longer be needed
-        # # make sure chmod is successful, hack to fix occasional permission errors
-        # while 'drwxrwxrwx' not in self.run_and_capture_output('ls -ld /ncluster'):
-        #   print(f"chmod 777 /ncluster didn't take, retrying in {TIMEOUT_SEC}")
-        #   time.sleep(TIMEOUT_SEC)
-        #   self.run('sudo chmod 777 /ncluster')
-
-        # TODO(y): build a pstree and warn if trying to run something while main tmux bash has a subprocess running
-        # this would ensure that commands being sent are not being swallowed
+        self.run('sudo chmod 777 /scluster')
 
     def run(
         self,
