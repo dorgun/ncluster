@@ -1,9 +1,9 @@
-# ncluster
+# scluster
 By Yaroslav Bulatov and Andrew Shaw
 
 ```
-import ncluster
-task = ncluster.make_task(instance_type='p2.xlarge')
+import scluster
+task = scluster.make_task(instance_type='p2.xlarge')
 task.upload('myscript.py')
 task.run('python myscript.py > out')
 task.download('out')
@@ -13,8 +13,8 @@ task.download('out')
 Install pip, tmux, Python 3.6 (see below), then
 
 ```
-pip install -r https://raw.githubusercontent.com/diux-dev/ncluster/master/requirements.txt
-pip install ncluster
+pip install -r https://github.com/dorgun/scluster/blob/master/requirements.txt
+pip install scluster
 ```
 
 ### Extra

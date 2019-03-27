@@ -22,10 +22,10 @@ from . import aws_util as u
 from . import backend
 from . import util
 
-TMPDIR = '/tmp/ncluster'  # location for temp files on launching machine
+TMPDIR = '/tmp/scluster'  # location for temp files on launching machine
 AWS_LOCK_FN = '/tmp/aws.lock'  # lock file used to prevent concurrent creation of AWS resources by multiple workers in parallel
 SCLUSTER_DEFAULT_REGION = 'us-east-1'  # used as last resort if no other method set a region
-LOGDIR_ROOT = '/ncluster/runs'
+LOGDIR_ROOT = '/scluster/runs'
 
 # some image which is fast to load, to use for quick runs
 GENERIC_SMALL_IMAGE = 'amzn2-ami-hvm-2.0.20180622.1-x86_64-gp2'
